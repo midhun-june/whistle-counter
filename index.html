@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cooker Whistle Counter</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+        
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        
+        .controls {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        button {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 18px;
+            cursor: pointer;
+            margin: 10px;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+        }
+        
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .status {
+            text-align: center;
+            margin: 20px 0;
+            font-size: 18px;
+            padding: 15px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.1);
+        }
+        
+        .whistle-count {
+            text-align: center;
+            font-size: 3em;
+            font-weight: bold;
+            margin: 30px 0;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 15px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        
+        .settings {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 15px;
+            margin-top: 20px;
+        }
+        
+        .setting-group {
+            margin: 15px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        input[type="range"] {
+            width: 200px;
+        }
+        
+        .frequency-display {
+            height: 100px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            margin: 20px 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+        }
+        
+        canvas {
+            width: 100%;
+            height: 100px;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🍲 Cooker Whistle Counter</h1>
+        
+        <div class="controls">
+            <button id="startBtn">Start Listening</button>
+            <button id="stopBtn" disabled>Stop Listening</button>
+            <button id="resetBtn">Reset Count</button>
+        </div>
+        
+        <div class="status" id="status">Click "Start Listening" to begin detecting whistles</div>
+        
+        <div class="whistle-count">
+            Whistles: <span id="count">0</span>
+        </div>
+        
+        <div class="frequency-display">
+            <canvas id="frequencyCanvas"></canvas>
+        </div>
+        
+        <div class="settings">
+            <h3>Detection Settings</h3>
+            <div class="setting-group">
+                <label>Sensitivity:</label>
+                <input type="range" id="sensitivity" min="0.1" max="2.0" step="0.1" value="0.8">
+                <span id="sensitivityValue">0.8</span>
+            </div>
+            <div class="setting-group">
+                <label>Min Frequency (Hz):</label>
+                <input type="range" id="minFreq" min="1000" max="3000" step="100" value="2000">
+                <span id="minFreqValue">2000</span>
+            </div>
+            <div class="setting-group">
+                <label>Max Frequency (Hz):</label>
+                <input type="range" id="maxFreq" min="3000" max="6000" step="100" value="4000">
+                <span id="maxFreqValue">4000</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class WhistleDetector {
+            constructor() {
+                this.audioContext = null;
+                this.microphone = null;
+                this.analyser = null;
+                this.dataArray = null;
+                this.isListening = false;
+                this.whistleCount = 0;
+                this.lastWhistleTime = 0;
+                this.whistleThreshold = 0.8;
+                this.minFrequency = 2000;
+                this.maxFrequency = 4000;
+                this.debounceTime = 1000; // Minimum time between whistles (ms)
+                
+                this.canvas = document.getElementById('frequencyCanvas');
+                this.canvasCtx = this.canvas.getContext('2d');
+                this.setupCanvas();
+                
+                this.bindEvents();
+                this.updateDisplay();
+            }
+            
+            setupCanvas() {
+                this.canvas.width = this.canvas.offsetWidth;
+                this.canvas.height = this.canvas.offsetHeight;
+            }
+            
+            bindEvents() {
+                document.getElementById('startBtn').addEventListener('click', () => this.startListening());
+                document.getElementById('stopBtn').addEventListener('click', () => this.stopListening());
+                document.getElementById('resetBtn').addEventListener('click', () => this.resetCount());
+                
+                const sensitivitySlider = document.getElementById('sensitivity');
+                sensitivitySlider.addEventListener('input', (e) => {
+                    this.whistleThreshold = parseFloat(e.target.value);
+                    document.getElementById('sensitivityValue').textContent = e.target.value;
+                });
+                
+                const minFreqSlider = document.getElementById('minFreq');
+                minFreqSlider.addEventListener('input', (e) => {
+                    this.minFrequency = parseInt(e.target.value);
+                    document.getElementById('minFreqValue').textContent = e.target.value;
+                });
+                
+                const maxFreqSlider = document.getElementById('maxFreq');
+                maxFreqSlider.addEventListener('input', (e) => {
+                    this.maxFrequency = parseInt(e.target.value);
+                    document.getElementById('maxFreqValue').textContent = e.target.value;
+                });
+            }
+            
+            async startListening() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    this.microphone = this.audioContext.createMediaStreamSource(stream);
+                    this.analyser = this.audioContext.createAnalyser();
+                    
+                    this.analyser.fftSize = 2048;
+                    this.analyser.smoothingTimeConstant = 0.3;
+                    
+                    const bufferLength = this.analyser.frequencyBinCount;
+                    this.dataArray = new Uint8Array(bufferLength);
+                    
+                    this.microphone.connect(this.analyser);
+                    this.isListening = true;
+                    
+                    this.updateStatus('Listening for whistles... 🎧');
+                    document.getElementById('startBtn').disabled = true;
+                    document.getElementById('stopBtn').disabled = false;
+                    
+                    this.detectWhistle();
+                    
+                } catch (error) {
+                    console.error('Error accessing microphone:', error);
+                    this.updateStatus('Error: Could not access microphone. Please allow microphone access.');
+                }
+            }
+            
+            stopListening() {
+                this.isListening = false;
+                
+                if (this.microphone) {
+                    this.microphone.disconnect();
+                }
+                
+                if (this.audioContext) {
+                    this.audioContext.close();
+                }
+                
+                this.updateStatus('Stopped listening');
+                document.getElementById('startBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+                
+                // Clear canvas
+                this.canvasCtx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            }
+            
+            detectWhistle() {
+                if (!this.isListening) return;
+                
+                this.analyser.getByteFrequencyData(this.dataArray);
+                
+                const sampleRate = this.audioContext.sampleRate;
+                const frequencyBinSize = sampleRate / this.analyser.fftSize;
+                
+                const minBin = Math.floor(this.minFrequency / frequencyBinSize);
+                const maxBin = Math.floor(this.maxFrequency / frequencyBinSize);
+                
+                let maxAmplitude = 0;
+                let dominantFrequency = 0;
+                
+                // Find peak frequency in the whistle range
+                for (let i = minBin; i < maxBin && i < this.dataArray.length; i++) {
+                    if (this.dataArray[i] > maxAmplitude) {
+                        maxAmplitude = this.dataArray[i];
+                        dominantFrequency = i * frequencyBinSize;
+                    }
+                }
+                
+                // Normalize amplitude (0-1)
+                const normalizedAmplitude = maxAmplitude / 255;
+                
+                // Check for whistle pattern
+                const currentTime = Date.now();
+                const timeSinceLastWhistle = currentTime - this.lastWhistleTime;
+                
+                if (normalizedAmplitude > this.whistleThreshold && 
+                    timeSinceLastWhistle > this.debounceTime &&
+                    dominantFrequency >= this.minFrequency && 
+                    dominantFrequency <= this.maxFrequency) {
+                    
+                    this.whistleCount++;
+                    this.lastWhistleTime = currentTime;
+                    this.updateDisplay();
+                    this.flashDetection();
+                }
+                
+                this.drawFrequencySpectrum();
+                requestAnimationFrame(() => this.detectWhistle());
+            }
+            
+            drawFrequencySpectrum() {
+                const width = this.canvas.width;
+                const height = this.canvas.height;
+                
+                this.canvasCtx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+                this.canvasCtx.fillRect(0, 0, width, height);
+                
+                const barWidth = width / this.dataArray.length * 2;
+                let x = 0;
+                
+                for (let i = 0; i < this.dataArray.length; i++) {
+                    const barHeight = (this.dataArray[i] / 255) * height;
+                    
+                    // Highlight the whistle frequency range
+                    const frequency = i * (this.audioContext.sampleRate / this.analyser.fftSize);
+                    if (frequency >= this.minFrequency && frequency <= this.maxFrequency) {
+                        this.canvasCtx.fillStyle = `rgb(255, ${255 - this.dataArray[i]}, 0)`;
+                    } else {
+                        this.canvasCtx.fillStyle = `rgb(0, ${this.dataArray[i]}, 255)`;
+                    }
+                    
+                    this.canvasCtx.fillRect(x, height - barHeight, barWidth, barHeight);
+                    x += barWidth + 1;
+                }
+            }
+            
+            flashDetection() {
+                const status = document.getElementById('status');
+                const originalBg = status.style.background;
+                status.style.background = 'rgba(255, 100, 100, 0.8)';
+                status.textContent = '🎵 Whistle Detected! 🎵';
+                
+                setTimeout(() => {
+                    status.style.background = originalBg;
+                    status.textContent = 'Listening for whistles... 🎧';
+                }, 500);
+            }
+            
+            resetCount() {
+                this.whistleCount = 0;
+                this.updateDisplay();
+            }
+            
+            updateDisplay() {
+                document.getElementById('count').textContent = this.whistleCount;
+            }
+            
+            updateStatus(message) {
+                document.getElementById('status').textContent = message;
+            }
+        }
+        
+        // Initialize the whistle detector when page loads
+        window.addEventListener('load', () => {
+            new WhistleDetector();
+        });
+    </script>
+</body>
+</html>
