@@ -108,10 +108,63 @@
             font-size: 18px;
         }
         
-        canvas {
+        .target-setting {
+            text-align: center;
+            margin: 20px 0;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+        }
+        
+        .target-setting label {
+            display: block;
+            margin-bottom: 10px;
+            font-size: 18px;
+        }
+        
+        .target-setting input {
+            padding: 10px;
+            border: none;
+            border-radius: 25px;
+            font-size: 16px;
+            text-align: center;
+            margin-right: 10px;
+            width: 80px;
+        }
+        
+        .alert-message {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: linear-gradient(45deg, #ff4757, #ff3838);
+            color: white;
+            padding: 30px;
+            border-radius: 20px;
+            font-size: 24px;
+            font-weight: bold;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            animation: pulse 1s infinite;
+            display: none;
+        }
+        
+        @keyframes pulse {
+            0% { transform: translate(-50%, -50%) scale(1); }
+            50% { transform: translate(-50%, -50%) scale(1.05); }
+            100% { transform: translate(-50%, -50%) scale(1); }
+        }
+        
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
             width: 100%;
-            height: 100px;
-            border-radius: 10px;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 999;
+            display: none;
         }
     </style>
 </head>
@@ -125,10 +178,22 @@
             <button id="resetBtn">Reset Count</button>
         </div>
         
-        <div class="status" id="status">Click "Start Listening" to begin detecting whistles</div>
+        <div class="status" id="status">
+            <div>Click "Start Listening" to begin detecting whistles</div>
+            <div style="font-size: 14px; margin-top: 10px; opacity: 0.8;">
+                📱 <strong>Important:</strong> This app requires microphone access. Make sure you're using HTTPS or localhost.
+                <br>🔒 Look for a microphone permission popup in your browser's address bar.
+            </div>
+        </div>
         
         <div class="whistle-count">
-            Whistles: <span id="count">0</span>
+            Whistles: <span id="count">0</span> / <span id="targetCount">5</span>
+        </div>
+        
+        <div class="target-setting">
+            <label for="targetWhistles">Target Whistle Count:</label>
+            <input type="number" id="targetWhistles" min="1" max="20" value="5">
+            <button id="setTargetBtn">Set Target</button>
         </div>
         
         <div class="frequency-display">
@@ -164,11 +229,13 @@
                 this.dataArray = null;
                 this.isListening = false;
                 this.whistleCount = 0;
+                this.targetWhistles = 5;
                 this.lastWhistleTime = 0;
                 this.whistleThreshold = 0.8;
                 this.minFrequency = 2000;
                 this.maxFrequency = 4000;
                 this.debounceTime = 1000; // Minimum time between whistles (ms)
+                this.alertShown = false;
                 
                 this.canvas = document.getElementById('frequencyCanvas');
                 this.canvasCtx = this.canvas.getContext('2d');
@@ -187,6 +254,7 @@
                 document.getElementById('startBtn').addEventListener('click', () => this.startListening());
                 document.getElementById('stopBtn').addEventListener('click', () => this.stopListening());
                 document.getElementById('resetBtn').addEventListener('click', () => this.resetCount());
+                document.getElementById('setTargetBtn').addEventListener('click', () => this.setTarget());
                 
                 const sensitivitySlider = document.getElementById('sensitivity');
                 sensitivitySlider.addEventListener('input', (e) => {
@@ -209,8 +277,34 @@
             
             async startListening() {
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    // Check if getUserMedia is supported
+                    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                        throw new Error('getUserMedia is not supported in this browser');
+                    }
+                    
+                    this.updateStatus('Requesting microphone access... Please allow when prompted.');
+                    
+                    // Request microphone access with explicit constraints
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: {
+                            echoCancellation: false,
+                            noiseSuppression: false,
+                            autoGainControl: false
+                        } 
+                    });
+                    
+                    if (!stream || stream.getAudioTracks().length === 0) {
+                        throw new Error('No audio tracks found in the stream');
+                    }
+                    
+                    this.updateStatus('Microphone access granted! Setting up audio analysis...');
+                    
                     this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    
+                    if (this.audioContext.state === 'suspended') {
+                        await this.audioContext.resume();
+                    }
+                    
                     this.microphone = this.audioContext.createMediaStreamSource(stream);
                     this.analyser = this.audioContext.createAnalyser();
                     
@@ -231,7 +325,26 @@
                     
                 } catch (error) {
                     console.error('Error accessing microphone:', error);
-                    this.updateStatus('Error: Could not access microphone. Please allow microphone access.');
+                    
+                    let errorMessage = 'Error accessing microphone: ';
+                    
+                    if (error.name === 'NotAllowedError') {
+                        errorMessage += 'Permission denied. Please allow microphone access and try again.';
+                    } else if (error.name === 'NotFoundError') {
+                        errorMessage += 'No microphone found. Please connect a microphone and try again.';
+                    } else if (error.name === 'NotSupportedError') {
+                        errorMessage += 'Microphone not supported in this browser.';
+                    } else if (error.name === 'NotReadableError') {
+                        errorMessage += 'Microphone is being used by another application.';
+                    } else {
+                        errorMessage += error.message;
+                    }
+                    
+                    this.updateStatus(errorMessage);
+                    
+                    // Reset button states
+                    document.getElementById('startBtn').disabled = false;
+                    document.getElementById('stopBtn').disabled = true;
                 }
             }
             
@@ -250,7 +363,6 @@
                 document.getElementById('startBtn').disabled = false;
                 document.getElementById('stopBtn').disabled = true;
                 
-                // Clear canvas
                 this.canvasCtx.clearRect(0, 0, this.canvas.width, this.canvas.height);
             }
             
@@ -268,7 +380,6 @@
                 let maxAmplitude = 0;
                 let dominantFrequency = 0;
                 
-                // Find peak frequency in the whistle range
                 for (let i = minBin; i < maxBin && i < this.dataArray.length; i++) {
                     if (this.dataArray[i] > maxAmplitude) {
                         maxAmplitude = this.dataArray[i];
@@ -276,10 +387,8 @@
                     }
                 }
                 
-                // Normalize amplitude (0-1)
                 const normalizedAmplitude = maxAmplitude / 255;
                 
-                // Check for whistle pattern
                 const currentTime = Date.now();
                 const timeSinceLastWhistle = currentTime - this.lastWhistleTime;
                 
@@ -292,6 +401,11 @@
                     this.lastWhistleTime = currentTime;
                     this.updateDisplay();
                     this.flashDetection();
+                    
+                    if (this.whistleCount >= this.targetWhistles && !this.alertShown) {
+                        this.showAlert();
+                        this.playWarningSound();
+                    }
                 }
                 
                 this.drawFrequencySpectrum();
@@ -311,7 +425,6 @@
                 for (let i = 0; i < this.dataArray.length; i++) {
                     const barHeight = (this.dataArray[i] / 255) * height;
                     
-                    // Highlight the whistle frequency range
                     const frequency = i * (this.audioContext.sampleRate / this.analyser.fftSize);
                     if (frequency >= this.minFrequency && frequency <= this.maxFrequency) {
                         this.canvasCtx.fillStyle = `rgb(255, ${255 - this.dataArray[i]}, 0)`;
@@ -338,11 +451,83 @@
             
             resetCount() {
                 this.whistleCount = 0;
+                this.alertShown = false;
                 this.updateDisplay();
+            }
+            
+            setTarget() {
+                const targetInput = document.getElementById('targetWhistles');
+                const newTarget = parseInt(targetInput.value);
+                if (newTarget > 0 && newTarget <= 20) {
+                    this.targetWhistles = newTarget;
+                    this.alertShown = false; // Reset alert flag when target changes
+                    this.updateDisplay();
+                    this.updateStatus(`Target set to ${newTarget} whistles`);
+                    setTimeout(() => {
+                        if (!this.isListening) {
+                            this.updateStatus('Click "Start Listening" to begin detecting whistles');
+                        } else {
+                            this.updateStatus('Listening for whistles... 🎧');
+                        }
+                    }, 2000);
+                }
+            }
+            
+            showAlert() {
+                this.alertShown = true;
+                document.getElementById('overlay').style.display = 'block';
+                document.getElementById('alertMessage').style.display = 'block';
+                
+                this.updateStatus('🎉 TARGET REACHED! Your food is ready! 🎉');
+            }
+            
+            playWarningSound() {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                
+                const playBeep = (frequency, duration, delay) => {
+                    setTimeout(() => {
+                        const oscillator = audioCtx.createOscillator();
+                        const gainNode = audioCtx.createGain();
+                        
+                        oscillator.connect(gainNode);
+                        gainNode.connect(audioCtx.destination);
+                        
+                        oscillator.frequency.value = frequency;
+                        oscillator.type = 'sine';
+                        
+                        gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+                        
+                        oscillator.start(audioCtx.currentTime);
+                        oscillator.stop(audioCtx.currentTime + duration);
+                    }, delay);
+                };
+                
+                playBeep(800, 0.3, 0);
+                playBeep(600, 0.3, 400);
+                playBeep(800, 0.3, 800);
+                playBeep(600, 0.3, 1200);
+                playBeep(800, 0.5, 1600);
             }
             
             updateDisplay() {
                 document.getElementById('count').textContent = this.whistleCount;
+                document.getElementById('targetCount').textContent = this.targetWhistles;
+                
+                // Update progress visual indication
+                const progress = (this.whistleCount / this.targetWhistles) * 100;
+                const countElement = document.getElementById('count');
+                
+                if (this.whistleCount >= this.targetWhistles) {
+                    countElement.style.color = '#ff4757';
+                    countElement.style.textShadow = '0 0 10px #ff4757';
+                } else if (progress > 70) {
+                    countElement.style.color = '#ffa502';
+                    countElement.style.textShadow = '0 0 5px #ffa502';
+                } else {
+                    countElement.style.color = 'white';
+                    countElement.style.textShadow = '2px 2px 4px rgba(0, 0, 0, 0.3)';
+                }
             }
             
             updateStatus(message) {
@@ -350,7 +535,11 @@
             }
         }
         
-        // Initialize the whistle detector when page loads
+        function dismissAlert() {
+            document.getElementById('overlay').style.display = 'none';
+            document.getElementById('alertMessage').style.display = 'none';
+        }
+        
         window.addEventListener('load', () => {
             new WhistleDetector();
         });
